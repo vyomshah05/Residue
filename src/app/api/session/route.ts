@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ensureTimeseriesCollection, insertSessionSnapshot, getSessionStats, getProductivityByHour } from '@/lib/db/timeseries';
 import { getDb } from '@/lib/mongodb';
+import { recordUserSessionSnapshot } from '@/lib/auth/store';
 
 /**
  * POST /api/session
@@ -8,6 +9,7 @@ import { getDb } from '@/lib/mongodb';
  *
  * Body: {
  *   userId: string,
+ *   sessionId?: string,
  *   mode: string,
  *   acoustic_features?: { overallDb, frequencyBands, dominantFrequency, spectralCentroid },
  *   behavioral_features?: { typingSpeed, errorRate, interKeyLatency, mouseJitter, scrollVelocity, focusSwitchRate },
@@ -22,6 +24,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       userId,
+      sessionId,
       mode,
       acoustic_features,
       behavioral_features,
@@ -40,6 +43,7 @@ export async function POST(req: NextRequest) {
 
     const sessionDoc = {
       user_id: userId || 'anon',
+      session_id: sessionId || `session-${Date.now()}`,
       timestamp: new Date(),
       acoustic_features: acoustic_features || null,
       behavioral_features: behavioral_features || null,
@@ -52,6 +56,28 @@ export async function POST(req: NextRequest) {
     // Persist to MongoDB
     try {
       await insertSessionSnapshot(sessionDoc);
+      await recordUserSessionSnapshot(sessionDoc.user_id, {
+        sessionId: sessionDoc.session_id,
+        mode,
+        state: sessionDoc.state,
+        productivityScore: sessionDoc.productivity_score,
+      });
+
+      const db = await getDb();
+      await db.collection('profiles').updateOne(
+        { userId: sessionDoc.user_id },
+        {
+          $set: {
+            userId: sessionDoc.user_id,
+            currentlyStudying: true,
+            currentMode: mode || null,
+            lastActive: Date.now(),
+            lastState: sessionDoc.state,
+            lastProductivityScore: sessionDoc.productivity_score,
+          },
+        },
+        { upsert: true },
+      );
     } catch {
       // MongoDB not available — session still works in-memory
     }
