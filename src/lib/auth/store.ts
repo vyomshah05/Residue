@@ -605,6 +605,64 @@ export async function claimPairing(
   return updated;
 }
 
+/**
+ * Codeless auto-pairing for the iOS companion.
+ *
+ * When the phone polls `/api/phone/active-session` and discovers its
+ * owner has just started a desktop study session, it calls this helper
+ * (via `/api/pair/auto`) to bind without forcing the user to type a
+ * 6-digit code. Same-account safety is enforced at two layers:
+ *   1. The phone JWT's `uid` must match the active-session owner.
+ *   2. The pairing row stores `userId`, so subsequent
+ *      `/api/phone/{event,report}` calls (which already check
+ *      `pairing.userId === payload.uid`) keep working unchanged.
+ */
+export async function autoClaimPairing(args: {
+  userId: string;
+  sessionId: string;
+  phoneDeviceId: string;
+}): Promise<PhonePairingRecord> {
+  const now = Date.now();
+  // Synthetic, deterministic code keyed off the session — keeps the
+  // existing `code`-as-primary-key invariant in `phone_pairings` intact
+  // and means re-binding the same phone is idempotent.
+  const code = `auto-${args.sessionId}`;
+  const record: PhonePairingRecord = {
+    code,
+    userId: args.userId,
+    sessionId: args.sessionId,
+    createdAt: now,
+    expiresAt: now + 24 * 60 * 60 * 1000,
+    claimedAt: now,
+    phoneDeviceId: args.phoneDeviceId,
+  };
+  if (mongoEnabled()) {
+    const col = await pairingsCol();
+    await col.updateOne(
+      { code },
+      {
+        $setOnInsert: { code, createdAt: record.createdAt },
+        $set: {
+          userId: record.userId,
+          sessionId: record.sessionId,
+          expiresAt: record.expiresAt,
+          claimedAt: record.claimedAt,
+          phoneDeviceId: record.phoneDeviceId,
+        },
+      },
+      { upsert: true },
+    );
+    return (await col.findOne({ code })) ?? record;
+  }
+  const existing = memPairings.get(code);
+  const merged: PhonePairingRecord = {
+    ...record,
+    createdAt: existing?.createdAt ?? record.createdAt,
+  };
+  memPairings.set(code, merged);
+  return merged;
+}
+
 // ── Phone events ────────────────────────────────────────────────────────────
 
 export async function appendPhoneEvent(record: PhoneEventRecord): Promise<void> {
