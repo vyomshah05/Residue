@@ -143,6 +143,70 @@ export default function AgentPanel() {
 
       {expanded && (
         <div className="space-y-3">
+          {/* Your Agent — shown prominently at the top */}
+          {agents?.buddy_user ? (
+            <div className="bg-gray-800/50 rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className={`w-2.5 h-2.5 rounded-full ${statusDot(agents.buddy_user.status)}`} />
+                <span className="text-sm font-medium text-white">Your Study Buddy</span>
+                <span className="text-[9px] px-1 py-0.5 rounded text-green-400 bg-green-500/10">agent</span>
+              </div>
+
+              {/* Handle */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-purple-400 font-medium">@residue-study-buddy</span>
+                <button
+                  onClick={() => copyAddress('@residue-study-buddy', 'handle')}
+                  className="p-0.5 rounded hover:bg-gray-700/50 transition-colors"
+                  title="Copy handle"
+                >
+                  {copied === 'handle' ? (
+                    <svg className="w-3 h-3 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3 h-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+
+              {/* Address */}
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] font-mono text-gray-500 flex-1">
+                  {agents.buddy_user.address.length > 20
+                    ? `${agents.buddy_user.address.slice(0, 12)}...${agents.buddy_user.address.slice(-8)}`
+                    : agents.buddy_user.address}
+                </p>
+                <button
+                  onClick={() => copyAddress(agents.buddy_user?.address || '', 'buddy_user')}
+                  className="p-1 rounded hover:bg-gray-700/50 transition-colors"
+                  title="Copy agent address"
+                >
+                  {copied === 'buddy_user' ? (
+                    <svg className="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-gray-800/50 rounded-lg p-3">
+              <p className="text-xs text-gray-500">
+                Your agent will appear here when the agent mesh is running.
+              </p>
+              <p className="text-xs text-gray-600 mt-1">
+                Run: <code className="text-cyan-400/70">python scripts/agents/run_agent_mesh.py</code>
+              </p>
+            </div>
+          )}
+
           {/* Chat with Agent Button */}
           <button
             onClick={openASIOneChat}
@@ -162,57 +226,6 @@ export default function AgentPanel() {
               </div>
             </div>
           </button>
-
-          {/* Agent Addresses */}
-          <div className="space-y-2">
-            <p className="text-xs text-gray-400 font-medium">Agent Addresses</p>
-
-            {agents ? (
-              <>
-                {/* Gateway Agent */}
-                <AgentRow
-                  label="Gateway Agent"
-                  address={agents.gateway?.address || ''}
-                  status={agents.gateway?.status}
-                  role="gateway"
-                  onCopy={() => copyAddress(agents.gateway?.address || '', 'gateway')}
-                  isCopied={copied === 'gateway'}
-                  statusDot={statusDot}
-                />
-
-                {/* Study Buddy User */}
-                <AgentRow
-                  label="Your Study Buddy"
-                  address={agents.buddy_user?.address || ''}
-                  status={agents.buddy_user?.status}
-                  role="user"
-                  onCopy={() => copyAddress(agents.buddy_user?.address || '', 'buddy_user')}
-                  isCopied={copied === 'buddy_user'}
-                  statusDot={statusDot}
-                />
-
-                {/* Study Buddy Peer */}
-                <AgentRow
-                  label="Peer Study Buddy"
-                  address={agents.buddy_peer?.address || ''}
-                  status={agents.buddy_peer?.status}
-                  role="peer"
-                  onCopy={() => copyAddress(agents.buddy_peer?.address || '', 'buddy_peer')}
-                  isCopied={copied === 'buddy_peer'}
-                  statusDot={statusDot}
-                />
-              </>
-            ) : (
-              <div className="bg-gray-800/50 rounded-lg p-3">
-                <p className="text-xs text-gray-500">
-                  Agent addresses will appear here when the agent mesh is running.
-                </p>
-                <p className="text-xs text-gray-600 mt-1">
-                  Run: <code className="text-cyan-400/70">python scripts/agents/run_agent_mesh.py</code>
-                </p>
-              </div>
-            )}
-          </div>
 
           {/* Quick Test */}
           <div className="space-y-2">
@@ -258,65 +271,3 @@ export default function AgentPanel() {
   );
 }
 
-
-// ── Sub-component: Agent Row ────────────────────────────────────────────────
-
-function AgentRow({
-  label,
-  address,
-  status,
-  role,
-  onCopy,
-  isCopied,
-  statusDot,
-}: {
-  label: string;
-  address: string;
-  status?: string;
-  role: string;
-  onCopy: () => void;
-  isCopied: boolean;
-  statusDot: (s?: string) => string;
-}) {
-  if (!address) return null;
-
-  const truncated = address.length > 20
-    ? `${address.slice(0, 12)}...${address.slice(-8)}`
-    : address;
-
-  const roleColors: Record<string, string> = {
-    gateway: 'text-blue-400 bg-blue-500/10',
-    user: 'text-green-400 bg-green-500/10',
-    peer: 'text-orange-400 bg-orange-500/10',
-  };
-
-  return (
-    <div className="bg-gray-800/50 rounded-lg p-2.5 flex items-center gap-2">
-      <div className={`w-2 h-2 rounded-full ${statusDot(status)}`} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-300">{label}</span>
-          <span className={`text-[9px] px-1 py-0.5 rounded ${roleColors[role] || 'text-gray-400 bg-gray-500/10'}`}>
-            {role}
-          </span>
-        </div>
-        <p className="text-[10px] font-mono text-gray-500 mt-0.5">{truncated}</p>
-      </div>
-      <button
-        onClick={onCopy}
-        className="p-1 rounded hover:bg-gray-700/50 transition-colors"
-        title="Copy agent address"
-      >
-        {isCopied ? (
-          <svg className="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-        ) : (
-          <svg className="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-        )}
-      </button>
-    </div>
-  );
-}
