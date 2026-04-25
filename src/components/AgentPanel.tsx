@@ -11,6 +11,13 @@ interface MyAgent {
   agentId: number;
 }
 
+interface AgentEntry {
+  address: string;
+  port: number;
+  name: string;
+  role: string;
+}
+
 interface AgentActivity {
   timestamp: string;
   agent: string;
@@ -25,6 +32,7 @@ interface AgentPanelProps {
 
 export default function AgentPanel({ token, userId }: AgentPanelProps) {
   const [myAgent, setMyAgent] = useState<MyAgent | null>(null);
+  const [allAgents, setAllAgents] = useState<Record<string, AgentEntry> | null>(null);
   const [gatewayReady, setGatewayReady] = useState(false);
   const [activities, setActivities] = useState<AgentActivity[]>([]);
   const [expanded, setExpanded] = useState(true);
@@ -36,6 +44,7 @@ export default function AgentPanel({ token, userId }: AgentPanelProps) {
   const fetchMyAgent = useCallback(async () => {
     if (!token) {
       setMyAgent(null);
+      setAllAgents(null);
       return;
     }
     try {
@@ -45,6 +54,7 @@ export default function AgentPanel({ token, userId }: AgentPanelProps) {
       if (res.ok) {
         const data = await res.json();
         setMyAgent(data.agent);
+        if (data.agents) setAllAgents(data.agents);
       }
     } catch {
       // API not available
@@ -171,64 +181,57 @@ export default function AgentPanel({ token, userId }: AgentPanelProps) {
           {!token ? (
             <div className="bg-gray-800/50 rounded-lg p-3">
               <p className="text-xs text-gray-400">
-                Sign in to view your assigned Study Buddy agent.
+                Sign in to view your assigned agents.
               </p>
             </div>
+          ) : allAgents ? (
+            <div className="space-y-2">
+              {(['gateway', 'buddy_user', 'buddy_peer'] as const).map((key) => {
+                const agent = allAgents[key];
+                if (!agent) return null;
+                const copyKey = `addr-${key}`;
+                return (
+                  <div key={key} className="bg-gray-800/50 rounded-lg p-3 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${statusDot()}`} />
+                      <span className="text-xs font-medium text-white">{agent.name}</span>
+                      <span className="text-[9px] px-1 py-0.5 rounded text-green-400 bg-green-500/10">
+                        {agent.role}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-[10px] font-mono text-gray-500 flex-1">
+                        {agent.address.length > 20
+                          ? `${agent.address.slice(0, 12)}...${agent.address.slice(-8)}`
+                          : agent.address}
+                      </p>
+                      <button
+                        onClick={() => copyText(agent.address, copyKey)}
+                        className="p-1 rounded hover:bg-gray-700/50 transition-colors"
+                        title="Copy agent address"
+                      >
+                        {copied === copyKey ? (
+                          <svg className="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : (
+                          <svg className="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           ) : myAgent ? (
-            <div className="bg-gray-800/50 rounded-lg p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <div className={`w-2.5 h-2.5 rounded-full ${statusDot()}`} />
-                <span className="text-sm font-medium text-white">{myAgent.name}</span>
-                <span className="text-[9px] px-1 py-0.5 rounded text-green-400 bg-green-500/10">agent</span>
-              </div>
-
-              {/* Handle */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-purple-400 font-medium">{myAgent.handle}</span>
-                <button
-                  onClick={() => copyText(myAgent.handle, 'handle')}
-                  className="p-0.5 rounded hover:bg-gray-700/50 transition-colors"
-                  title="Copy handle"
-                >
-                  {copied === 'handle' ? (
-                    <svg className="w-3 h-3 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  ) : (
-                    <svg className="w-3 h-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                  )}
-                </button>
-              </div>
-
-              {/* Address */}
-              <div className="flex items-center gap-2">
-                <p className="text-[10px] font-mono text-gray-500 flex-1">
-                  {myAgent.address.length > 20
-                    ? `${myAgent.address.slice(0, 12)}...${myAgent.address.slice(-8)}`
-                    : myAgent.address}
-                </p>
-                <button
-                  onClick={() => copyText(myAgent.address, 'address')}
-                  className="p-1 rounded hover:bg-gray-700/50 transition-colors"
-                  title="Copy agent address"
-                >
-                  {copied === 'address' ? (
-                    <svg className="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  ) : (
-                    <svg className="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                  )}
-                </button>
-              </div>
+            <div className="bg-gray-800/50 rounded-lg p-3">
+              <p className="text-xs text-gray-500">Loading agents...</p>
             </div>
           ) : (
             <div className="bg-gray-800/50 rounded-lg p-3">
-              <p className="text-xs text-gray-500">Loading your agent...</p>
+              <p className="text-xs text-gray-500">Loading agents...</p>
             </div>
           )}
 

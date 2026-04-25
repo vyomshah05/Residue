@@ -34,5 +34,25 @@ export async function GET(req: NextRequest) {
       agentId: assignment.agentId,
       poolIndex: assignment.poolIndex,
     },
+    agents: {
+      gateway: {
+        address: assignment.gateway.address,
+        port: assignment.gateway.port,
+        name: 'Gateway Agent',
+        role: 'gateway',
+      },
+      buddy_user: {
+        address: assignment.buddyUser.address,
+        port: assignment.buddyUser.port,
+        name: 'Study Buddy (User)',
+        role: 'buddy_user',
+      },
+      buddy_peer: {
+        address: assignment.buddyPeer.address,
+        port: assignment.buddyPeer.port,
+        name: 'Study Buddy (Peer)',
+        role: 'buddy_peer',
+      },
+    },
   });
 }
