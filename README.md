@@ -105,14 +105,23 @@ Published at 10Hz for inter-agent consumption:
 
 ### Phone Distraction Tracking (iOS Companion)
 - Native iOS companion app under [`ios/ResiduePhone/`](./ios/README.md) that
-  pairs with the desktop session via a 6-digit code.
-- Tracks `UIApplication` lifecycle (every time the user opens the phone)
+  shares the **same Mongo `users` account** as the desktop. Once you sign
+  in on the phone, it auto-binds to whatever desktop study session the same
+  account is running (poller against `/api/phone/active-session` →
+  codeless `/api/pair/auto`). The legacy 6-digit pairing path is preserved
+  as a manual fallback.
+- Tracks `UIApplication` lifecycle (every time the user unlocks the phone)
   during an active study session and pushes events to `/api/phone/event`,
   reducing the desktop's productivity score in real time.
-- Generates a personalized natural-language distraction report **fully
-  on-device** using the **ZETIC Melange `Steve/Qwen3.5-2B` LLM** on Apple
-  Neural Engine. Only the rendered summary travels to the cloud — the prompt
-  and per-app log never leave the phone.
+- **When the desktop session stops**, the phone automatically generates a
+  personalised natural-language distraction report **fully on-device**
+  using the **ZETIC Melange `Steve/Qwen3.5-2B` LLM** on Apple Neural Engine,
+  shows it on the phone, and POSTs the rendered summary to the desktop.
+  The desktop then feeds the same report into the existing Fetch.ai
+  `CorrelationAgent` (and best-effort `Orchestrator`) so the user's
+  personal acoustic-state model incorporates phone-distraction signals on
+  every session. The "Generate distraction report" button on the phone is
+  preserved as a manual fallback.
 - Optional ScreenTime / FamilyControls integration for per-category app-time
   breakdowns in the report. See [`ios/README.md`](./ios/README.md) for setup.
 

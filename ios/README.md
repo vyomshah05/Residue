@@ -3,17 +3,28 @@
 Native SwiftUI companion app for the Residue desktop. The phone:
 
 1. Signs into the same Residue account as the desktop (`/api/auth/login`).
-2. Pairs with an active desktop study session by entering the 6-digit code the
-   desktop displays (`/api/pair/claim`).
+2. Auto-binds to the desktop study session as soon as the same-account user
+   clicks **Start Session** on their laptop. The phone polls
+   `/api/phone/active-session` and uses `/api/pair/auto` to bind without a
+   6-digit code. The legacy 6-digit `PairView` + `/api/pair/claim` path is
+   preserved as a manual fallback (e.g. when the phone is signed into a
+   different desktop user).
 3. Tracks `UIApplication` lifecycle (foreground / background) during the
    session and posts each transition to `/api/phone/event`. The desktop's
    `ProductivityTracker` subtracts a real-time penalty for every unlock.
 4. (Optional) Uses Apple **ScreenTime / FamilyControls** to capture
    per-category app usage during the session.
-5. Runs the **Zetic Melange `Steve/Qwen3.5-2B` LLM fully on-device** (Apple
-   Neural Engine via `ZeticMLangeLLMModel`) to generate a natural-language
-   distraction report. Only the rendered summary travels back to the
-   desktop — the prompt and per-app log never leave the phone.
+5. **When the laptop ends the session**, the phone automatically runs the
+   **Zetic Melange `Steve/Qwen3.5-2B` LLM fully on-device** (Apple Neural
+   Engine via `ZeticMLangeLLMModel`) to generate a natural-language
+   distraction report. The same `SessionView` "On-device distraction report"
+   section displays the result, and only the rendered summary travels back
+   to the desktop — the prompt and per-app log never leave the phone. The
+   desktop POSTs the same summary into the existing Fetch.ai
+   `CorrelationAgent` (and best-effort `Orchestrator`) so the user's
+   personal acoustic-state model learns from phone-distraction signals on
+   every session. The "Generate distraction report" button is preserved as
+   a manual fallback.
 
 ## On-device vs cloud separation (Zetic Melange track)
 
@@ -35,12 +46,13 @@ ios/ResiduePhone/
   project.yml                    # XcodeGen project definition
   ResiduePhone/
     ResiduePhoneApp.swift        # @main + DI
-    RootView.swift               # AuthView ↔ PairView ↔ SessionView routing
+    RootView.swift               # AuthView ↔ SessionView routing (PairView retained as manual fallback)
     AuthView.swift               # Email/password sign-in & sign-up
-    PairView.swift               # 6-digit pairing code entry
+    PairView.swift               # 6-digit pairing code entry (manual fallback)
     SessionView.swift            # Live counters + "Generate report" button
     SessionStore.swift           # ObservableObject app state
     ResidueAPI.swift             # Backend client
+    ActiveSessionPoller.swift    # Polls /api/phone/active-session for auto-bind / auto-report
     AppLifecycleMonitor.swift    # UIApplication notifications → events
     ScreenTimeUsage.swift        # FamilyControls/DeviceActivity wrapper
     MelangeReportGenerator.swift # ZeticMLangeLLMModel host
@@ -93,16 +105,28 @@ ios/ResiduePhone/
 
 ## End-to-end flow
 
-1. On the desktop: sign in → start session → click **Generate pairing code**.
-2. On the phone: open Residue → sign in (same account) → type the 6 digits.
-3. Use your phone normally during the study session. Each time the Residue
-   companion app comes to the foreground (i.e. you opened the phone), the
-   desktop session productivity score drops by a small amount.
-4. When you're done, open Residue on the phone and tap **Generate distraction
-   report**. The Qwen3.5-2B model loads on first use (the user-supplied
-   download progress callback drives the UI), runs locally on the Apple
-   Neural Engine, and writes a 3–4 sentence summary back to the desktop's
-   pairing panel.
+1. On the desktop: sign in → click **Start Session**.
+2. On the phone: open Residue → sign in with the **same account**. Within
+   ~5 seconds (one `ActiveSessionPoller` tick) the phone auto-binds to the
+   desktop session via `/api/pair/auto` — no 6-digit code to type.
+3. Use your phone normally during the study session. Each time the device
+   unlocks, the desktop's `ProductivityTracker` subtracts a real-time
+   penalty.
+4. When you're done, click **End Session** on the desktop. The desktop
+   POSTs `/api/session/stop`, the phone's poller sees the
+   `currentlyStudying: true → false` transition, and `SessionStore`
+   automatically calls `generateReport()`. The Qwen3.5-2B model loads on
+   first use (the user-supplied download progress callback drives the UI),
+   runs locally on the Apple Neural Engine, and the rendered summary:
+   - is shown in `SessionView`'s "On-device distraction report" section,
+   - is POSTed to `/api/phone/report` so the desktop's pairing panel
+     renders it,
+   - is fed (server-side) into the existing Fetch.ai `CorrelationAgent`
+     (and best-effort `Orchestrator`) so the user's personal acoustic-state
+     model improves on every session.
+
+The manual **Generate distraction report** button on the phone is
+preserved as a fallback.
 
 ## Notes & limitations
 
