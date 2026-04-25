@@ -131,13 +131,13 @@ export default function Home() {
       <header className="border-b border-gray-800/50 bg-gray-900/30 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-purple-600 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-linear-to-br from-cyan-500 to-purple-600 flex items-center justify-center">
               <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
               </svg>
             </div>
             <div>
-              <h1 className="text-xl font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
+              <h1 className="text-xl font-bold bg-linear-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
                 Residue
               </h1>
               <p className="text-xs text-gray-500">Personalized Acoustic Intelligence</p>
@@ -148,9 +148,6 @@ export default function Home() {
             <AuthControl
               ready={auth.ready}
               user={auth.user}
-              error={auth.error}
-              onLogin={auth.login}
-              onRegister={auth.register}
               onLogout={auth.logout}
             />
             {sessionActive && (
@@ -166,7 +163,7 @@ export default function Home() {
               className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
                 sessionActive
                   ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30'
-                  : 'bg-gradient-to-r from-cyan-500 to-purple-600 text-white hover:opacity-90'
+                  : 'bg-linear-to-r from-cyan-500 to-purple-600 text-white hover:opacity-90'
               }`}
             >
               {sessionActive ? 'End Session' : 'Start Session'}
