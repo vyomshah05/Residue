@@ -419,6 +419,69 @@ export async function recordUserSessionSnapshot(
 }
 
 /**
+ * Returns the active study-session view for the iOS companion. The phone
+ * polls this every few seconds while signed in; transitions in
+ * `currentlyStudying` are what trigger auto-bind (false → true) and
+ * auto-report (true → false) on the device.
+ */
+export interface ActiveSessionView {
+  userId: string;
+  currentlyStudying: boolean;
+  currentSessionId: string | null;
+  currentMode: string | null;
+  startedAt: number | null;
+  endedAt: number | null;
+}
+
+export async function getActiveSessionForUser(
+  userId: string,
+): Promise<ActiveSessionView> {
+  const empty: ActiveSessionView = {
+    userId,
+    currentlyStudying: false,
+    currentSessionId: null,
+    currentMode: null,
+    startedAt: null,
+    endedAt: null,
+  };
+  if (mongoEnabled()) {
+    const col = await userDataCol();
+    const data = (await col.findOne({ userId })) as
+      | (UserDataRecord & {
+          studyStatus?: {
+            startedAt?: number;
+            endedAt?: number;
+          };
+        })
+      | null;
+    if (!data) return empty;
+    const status = data.studyStatus;
+    return {
+      userId,
+      currentlyStudying: Boolean(status?.currentlyStudying),
+      currentSessionId: status?.currentSessionId ?? null,
+      currentMode: status?.currentMode ?? null,
+      startedAt: status?.startedAt ?? status?.lastActiveAt ?? null,
+      endedAt: status?.endedAt ?? null,
+    };
+  }
+  const data = memUserData.get(userId);
+  if (!data) return empty;
+  const status = data.studyStatus as typeof data.studyStatus & {
+    startedAt?: number;
+    endedAt?: number;
+  };
+  return {
+    userId,
+    currentlyStudying: Boolean(status.currentlyStudying),
+    currentSessionId: status.currentSessionId ?? null,
+    currentMode: status.currentMode ?? null,
+    startedAt: status.startedAt ?? status.lastActiveAt ?? null,
+    endedAt: status.endedAt ?? null,
+  };
+}
+
+/**
  * Mark a study session as stopped on the user's profile.
  *
  * Flips `studyStatus.currentlyStudying` to false, records `endedAt`, and
