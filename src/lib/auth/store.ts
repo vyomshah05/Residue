@@ -17,7 +17,6 @@ import {
   getUsersCollection,
 } from '@/lib/mongodb';
 
-import { POOL_SIZE } from '@/lib/agents/pool';
 
 // MongoDB's default Collection type narrows `_id` to ObjectId; we use string
 // ids (`user-<uuid>`, 6-digit pairing codes, …) so we cast the collection to a
@@ -38,8 +37,8 @@ export interface UserRecord {
   passwordHash: string;
   createdAt: number;
   updatedAt: number;
-  /** Index into the agent pool (0 .. POOL_SIZE-1). */
-  agentSetIndex?: number;
+  /** Unique agent ID (1, 2, 3, ...). Used for handle and pool assignment. */
+  agentId?: number;
 }
 
 export interface UserDataRecord {
@@ -140,8 +139,8 @@ export async function findUserById(uid: string): Promise<UserRecord | null> {
 }
 
 export async function createUser(record: UserRecord): Promise<void> {
-  const idx = await nextAgentSetIndex();
-  const normalized = { ...record, email: record.email.trim().toLowerCase(), agentSetIndex: idx };
+  const id = await nextAgentId();
+  const normalized = { ...record, email: record.email.trim().toLowerCase(), agentId: id };
   if (mongoEnabled()) {
     await ensureMongoIndexes();
     const col = await usersCol();
@@ -271,25 +270,23 @@ export async function recordUserSessionSnapshot(userId: string): Promise<void> {
   }
 }
 
-// ── Agent pool round-robin counter ──────────────────────────────────────────
+// ── Agent ID counter (unique per user, starts at 1) ────────────────────────
 
 let memCounter = 0;
 
-async function nextAgentSetIndex(): Promise<number> {
+async function nextAgentId(): Promise<number> {
   if (mongoEnabled()) {
     const db = await getDb();
     const counters = db.collection('counters') as unknown as Collection<{ _id: string; seq: number }>;
     const result = await counters.findOneAndUpdate(
-      { _id: 'agentPoolIndex' },
+      { _id: 'agentIdCounter' },
       { $inc: { seq: 1 } },
       { upsert: true, returnDocument: 'after' },
     );
-    const seq = (result as unknown as { seq?: number })?.seq ?? 0;
-    return seq % POOL_SIZE;
+    return (result as unknown as { seq?: number })?.seq ?? 1;
   }
-  const idx = memCounter % POOL_SIZE;
   memCounter += 1;
-  return idx;
+  return memCounter;
 }
 
 // ── Pairings ────────────────────────────────────────────────────────────────
