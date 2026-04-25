@@ -188,7 +188,7 @@ export async function ensureUserData(
   if (mongoEnabled()) {
     await ensureMongoIndexes();
     const col = await userDataCol();
-    const result = await col.updateOne(
+    await col.updateOne(
       { userId: user._id },
       {
         $setOnInsert: {
@@ -202,12 +202,6 @@ export async function ensureUserData(
       },
       { upsert: true },
     );
-    if (result.matchedCount > 0) {
-      await col.updateOne(
-        { userId: user._id },
-        { $set: { email: user.email, updatedAt: now } },
-      );
-    }
     return (await col.findOne({ userId: user._id })) ?? defaults;
   }
 
