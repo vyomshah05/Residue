@@ -156,6 +156,7 @@ function Dashboard({ auth }: { auth: AuthSession }) {
     rawFrequencyData,
     startListening,
     stopListening,
+    error: audioError,
   } = useAudioCapture();
 
   const {
@@ -351,6 +352,13 @@ function Dashboard({ auth }: { auth: AuthSession }) {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+        {audioError && (
+          <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            <strong className="font-semibold">Microphone unavailable:</strong>{' '}
+            {audioError}
+          </div>
+        )}
+
         {/* Mode Selector */}
         <ModeSelector currentMode={currentMode} onModeChange={setCurrentMode} />
 

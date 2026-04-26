@@ -87,6 +87,13 @@ export function useAudioCapture() {
   const [isListening, setIsListening] = useState(false);
   const [currentProfile, setCurrentProfile] = useState<AcousticProfile | null>(null);
   const [rawFrequencyData, setRawFrequencyData] = useState<number[]>([]);
+  /**
+   * Surfaced when `getUserMedia` is unavailable or denied so the UI
+   * can render a banner instead of silently doing nothing. Callers
+   * can also handle this themselves by checking `error` after
+   * `startListening()` returns.
+   */
+  const [error, setError] = useState<string | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -126,6 +133,27 @@ export function useAudioCapture() {
   }, []);
 
   const startListening = useCallback(async () => {
+    setError(null);
+
+    // navigator.mediaDevices is only defined in a "secure context"
+    // (https:// or http://localhost / 127.0.0.1). Loading the dev
+    // server from a LAN IP like http://10.30.227.114:3000 — which is
+    // what we do when testing the iOS companion against the laptop —
+    // makes mediaDevices undefined, and calling .getUserMedia on it
+    // throws "Cannot read properties of undefined". Catch that case
+    // explicitly and surface a useful message instead of a generic
+    // crash.
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      const isSecure = typeof window !== 'undefined' && window.isSecureContext;
+      const host = typeof window !== 'undefined' ? window.location.hostname : '';
+      const message = isSecure
+        ? 'Microphone access is unavailable in this browser.'
+        : `Microphone access requires a secure context. Open Residue at http://localhost:3000 (or behind HTTPS) instead of http://${host}:3000 — Chrome blocks getUserMedia on insecure LAN origins.`;
+      console.error('[useAudioCapture]', message);
+      setError(message);
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -149,7 +177,9 @@ export function useAudioCapture() {
       setIsListening(true);
       analyze();
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Microphone access denied';
       console.error('Microphone access denied:', err);
+      setError(message);
     }
   }, [analyze]);
 
@@ -182,5 +212,6 @@ export function useAudioCapture() {
     rawFrequencyData,
     startListening,
     stopListening,
+    error,
   };
 }
