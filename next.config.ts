@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { NextConfig } from "next";
 
 // Allow the LAN/dev hosts a phone or tablet uses to hit `npm run dev` over the
@@ -14,12 +13,6 @@ const devOrigins = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: devOrigins,
-  // Pin Turbopack's workspace root to this repo so a stray
-  // `package-lock.json` in $HOME doesn't get picked up as the root and slow
-  // dev startup / break path resolution.
-  turbopack: {
-    root: path.resolve(__dirname),
-  },
 };
 
 export default nextConfig;
