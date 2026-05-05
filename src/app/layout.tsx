@@ -28,7 +28,24 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
-      <body className="min-h-full flex flex-col bg-[#0a0a1a]">{children}</body>
+      {/*
+        suppressHydrationWarning is needed because browser extensions
+        (Grammarly, LastPass, etc.) inject DOM attributes onto <body>
+        after React's server-rendered HTML reaches the client but
+        before hydration runs. Those injected attributes
+        (`data-new-gr-c-s-check-loaded`, `data-gr-ext-installed`,
+        `data-lt-installed`, …) are not present in the SSR output and
+        cause a hydration mismatch warning. The mismatch is harmless —
+        React still renders correctly — but Next surfaces it as a
+        console error. Suppressing on this single element is the
+        sanctioned fix per the Next.js docs.
+      */}
+      <body
+        className="min-h-full flex flex-col bg-[#0a0a1a]"
+        suppressHydrationWarning
+      >
+        {children}
+      </body>
     </html>
   );
 }

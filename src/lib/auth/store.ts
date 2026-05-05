@@ -418,6 +418,166 @@ export async function recordUserSessionSnapshot(
   }
 }
 
+/**
+ * Returns the active study-session view for the iOS companion. The phone
+ * polls this every few seconds while signed in; transitions in
+ * `currentlyStudying` are what trigger auto-bind (false → true) and
+ * auto-report (true → false) on the device.
+ */
+export interface ActiveSessionView {
+  userId: string;
+  currentlyStudying: boolean;
+  currentSessionId: string | null;
+  currentMode: string | null;
+  startedAt: number | null;
+  endedAt: number | null;
+}
+
+export async function getActiveSessionForUser(
+  userId: string,
+): Promise<ActiveSessionView> {
+  const empty: ActiveSessionView = {
+    userId,
+    currentlyStudying: false,
+    currentSessionId: null,
+    currentMode: null,
+    startedAt: null,
+    endedAt: null,
+  };
+  if (mongoEnabled()) {
+    const col = await userDataCol();
+    const data = (await col.findOne({ userId })) as
+      | (UserDataRecord & {
+          studyStatus?: {
+            startedAt?: number;
+            endedAt?: number;
+          };
+        })
+      | null;
+    if (!data) return empty;
+    const status = data.studyStatus;
+    return {
+      userId,
+      currentlyStudying: Boolean(status?.currentlyStudying),
+      currentSessionId: status?.currentSessionId ?? null,
+      currentMode: status?.currentMode ?? null,
+      startedAt: status?.startedAt ?? status?.lastActiveAt ?? null,
+      endedAt: status?.endedAt ?? null,
+    };
+  }
+  const data = memUserData.get(userId);
+  if (!data) return empty;
+  const status = data.studyStatus as typeof data.studyStatus & {
+    startedAt?: number;
+    endedAt?: number;
+  };
+  return {
+    userId,
+    currentlyStudying: Boolean(status.currentlyStudying),
+    currentSessionId: status.currentSessionId ?? null,
+    currentMode: status.currentMode ?? null,
+    startedAt: status.startedAt ?? status.lastActiveAt ?? null,
+    endedAt: status.endedAt ?? null,
+  };
+}
+
+/**
+ * Mark a study session as started on the user's profile.
+ *
+ * Flips `studyStatus.currentlyStudying` to true, stamps a fresh
+ * `startedAt`, and records `currentSessionId`. Called from the
+ * desktop's "Start Session" button so the iOS companion's
+ * `/api/phone/active-session` poll picks up the rising edge
+ * immediately — without depending on the side-effect of an
+ * acoustic/screen snapshot also being captured (which fails on
+ * insecure-context dev origins where mic/screen capture is blocked).
+ */
+export async function markSessionStarted(
+  userId: string,
+  sessionId: string,
+  mode?: string | null,
+): Promise<void> {
+  const now = Date.now();
+  if (mongoEnabled()) {
+    const col = await userDataCol();
+    await col.updateOne(
+      { userId },
+      {
+        $set: {
+          updatedAt: now,
+          'studyStatus.currentlyStudying': true,
+          'studyStatus.currentSessionId': sessionId,
+          'studyStatus.currentMode': mode ?? null,
+          'studyStatus.startedAt': now,
+          'studyStatus.endedAt': null,
+          'studyStatus.lastActiveAt': now,
+        },
+      },
+      { upsert: true },
+    );
+    return;
+  }
+  const existing = memUserData.get(userId);
+  if (!existing) return;
+  memUserData.set(userId, {
+    ...existing,
+    updatedAt: now,
+    studyStatus: {
+      ...existing.studyStatus,
+      currentlyStudying: true,
+      currentSessionId: sessionId,
+      currentMode: mode ?? existing.studyStatus.currentMode,
+      lastActiveAt: now,
+    },
+  });
+}
+
+/**
+ * Mark a study session as stopped on the user's profile.
+ *
+ * Flips `studyStatus.currentlyStudying` to false, records `endedAt`, and
+ * (when MongoDB is available) keeps the rest of the `studyStatus` block
+ * intact so the iOS companion can still resolve which session a late
+ * report belongs to. Safe to call repeatedly; if no record exists yet the
+ * call is a no-op.
+ */
+export async function markSessionStopped(
+  userId: string,
+  sessionId?: string | null,
+): Promise<void> {
+  const now = Date.now();
+  if (mongoEnabled()) {
+    const col = await userDataCol();
+    await col.updateOne(
+      { userId },
+      {
+        $set: {
+          updatedAt: now,
+          'studyStatus.currentlyStudying': false,
+          'studyStatus.endedAt': now,
+          'studyStatus.lastSessionAt': now,
+          ...(sessionId
+            ? { 'studyStatus.currentSessionId': sessionId }
+            : {}),
+        },
+      },
+    );
+    return;
+  }
+  const existing = memUserData.get(userId);
+  if (!existing) return;
+  memUserData.set(userId, {
+    ...existing,
+    updatedAt: now,
+    studyStatus: {
+      ...existing.studyStatus,
+      currentlyStudying: false,
+      currentSessionId: sessionId ?? existing.studyStatus.currentSessionId,
+      lastActiveAt: existing.studyStatus.lastActiveAt ?? now,
+    },
+  });
+}
+
 // ── Agent ID counter (unique per user, starts at 1) ────────────────────────
 
 let memCounter = 0;
@@ -494,6 +654,64 @@ export async function claimPairing(
   const updated: PhonePairingRecord = { ...existing, phoneDeviceId, claimedAt };
   memPairings.set(code, updated);
   return updated;
+}
+
+/**
+ * Codeless auto-pairing for the iOS companion.
+ *
+ * When the phone polls `/api/phone/active-session` and discovers its
+ * owner has just started a desktop study session, it calls this helper
+ * (via `/api/pair/auto`) to bind without forcing the user to type a
+ * 6-digit code. Same-account safety is enforced at two layers:
+ *   1. The phone JWT's `uid` must match the active-session owner.
+ *   2. The pairing row stores `userId`, so subsequent
+ *      `/api/phone/{event,report}` calls (which already check
+ *      `pairing.userId === payload.uid`) keep working unchanged.
+ */
+export async function autoClaimPairing(args: {
+  userId: string;
+  sessionId: string;
+  phoneDeviceId: string;
+}): Promise<PhonePairingRecord> {
+  const now = Date.now();
+  // Synthetic, deterministic code keyed off the session — keeps the
+  // existing `code`-as-primary-key invariant in `phone_pairings` intact
+  // and means re-binding the same phone is idempotent.
+  const code = `auto-${args.sessionId}`;
+  const record: PhonePairingRecord = {
+    code,
+    userId: args.userId,
+    sessionId: args.sessionId,
+    createdAt: now,
+    expiresAt: now + 24 * 60 * 60 * 1000,
+    claimedAt: now,
+    phoneDeviceId: args.phoneDeviceId,
+  };
+  if (mongoEnabled()) {
+    const col = await pairingsCol();
+    await col.updateOne(
+      { code },
+      {
+        $setOnInsert: { code, createdAt: record.createdAt },
+        $set: {
+          userId: record.userId,
+          sessionId: record.sessionId,
+          expiresAt: record.expiresAt,
+          claimedAt: record.claimedAt,
+          phoneDeviceId: record.phoneDeviceId,
+        },
+      },
+      { upsert: true },
+    );
+    return (await col.findOne({ code })) ?? record;
+  }
+  const existing = memPairings.get(code);
+  const merged: PhonePairingRecord = {
+    ...record,
+    createdAt: existing?.createdAt ?? record.createdAt,
+  };
+  memPairings.set(code, merged);
+  return merged;
 }
 
 // ── Phone events ────────────────────────────────────────────────────────────

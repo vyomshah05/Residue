@@ -6,6 +6,7 @@ import {
   findPhoneReport,
   upsertPhoneReport,
 } from '@/lib/auth/store';
+import { feedReportIntoAgents } from '@/lib/agents/feedPhoneReport';
 
 /**
  * POST /api/phone/report
@@ -34,6 +35,8 @@ export async function POST(req: NextRequest) {
     inferenceMs?: number;
     promptTokens?: number;
     completionTokens?: number;
+    unlockCount?: number;
+    totalDistractionMs?: number;
   };
 
   const { sessionId, summary } = body;
@@ -55,7 +58,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  await upsertPhoneReport({
+  const stored = {
     sessionId,
     userId: payload.uid,
     summary,
@@ -65,6 +68,17 @@ export async function POST(req: NextRequest) {
     promptTokens: body.promptTokens ?? 0,
     completionTokens: body.completionTokens ?? 0,
     createdAt: Date.now(),
+  };
+  await upsertPhoneReport(stored);
+
+  // Fire-and-forget: feed the report into the existing Fetch.ai
+  // pipeline (CorrelationAgent rebuild + best-effort Orchestrator
+  // refresh). The function never throws, so the desktop UI keeps
+  // rendering even if the agent stack is offline.
+  void feedReportIntoAgents(payload.uid, sessionId, stored, {
+    unlockCount: typeof body.unlockCount === 'number' ? body.unlockCount : undefined,
+    totalDistractionMs:
+      typeof body.totalDistractionMs === 'number' ? body.totalDistractionMs : undefined,
   });
 
   return NextResponse.json({ status: 'ok' });

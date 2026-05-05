@@ -25,6 +25,10 @@ final class SessionStore: ObservableObject {
     // Pairing
     @Published var pairedSessionId: String?
     @Published var sessionStart: Date?
+    /// Timestamp at which the desktop ended the current session.
+    /// Drives the "Session ended on desktop — generating report…"
+    /// banner the user sees on the falling edge.
+    @Published var sessionEndedAt: Date?
 
     // Live counters
     @Published var openCount: Int = 0
@@ -36,6 +40,11 @@ final class SessionStore: ObservableObject {
     @Published var reportSummary: String?
     @Published var reportInProgress: Bool = false
     @Published var reportLatencyMs: Double = 0
+    /// Set when `generateReport()` fails (e.g. Melange key missing,
+    /// SDK not linked, network error). The SessionView surfaces it
+    /// directly in the report section so the user understands why
+    /// nothing rendered.
+    @Published var reportError: String?
 
     @Published var statusMessage: String?
 
@@ -59,6 +68,7 @@ final class SessionStore: ObservableObject {
 
     private var monitor: AppLifecycleMonitor?
     private let melange = MelangeReportGenerator()
+    private let activeSessionPoller = ActiveSessionPoller()
 
     func bootstrap() async {
         token = UserDefaults.standard.string(forKey: DefaultsKey.token)
@@ -66,10 +76,26 @@ final class SessionStore: ObservableObject {
         if let t = token {
             do {
                 user = try await api.me(token: t)
-                if sessionStart == nil {
-                    sessionStart = Date()
+                // Intentionally do NOT default `sessionStart` here. It
+                // is reset to the desktop's `studyStatus.startedAt` on
+                // the rising edge of a desktop session (see
+                // `bindToActiveSession`). Defaulting it on bootstrap
+                // would make the SessionView show a stale "Started"
+                // time that has nothing to do with the currently
+                // running study session.
+                //
+                // Also do an immediate active-session check so a phone
+                // that was already paired before the app was killed
+                // reattaches to the in-progress desktop session within
+                // ~one network round-trip rather than waiting for the
+                // first poll tick.
+                if let active = try? await api.activeSession(token: t),
+                   active.currentlyStudying,
+                   let sid = active.currentSessionId {
+                    await bindToActiveSession(sessionId: sid, startedAt: active.startedAt)
                 }
                 startSessionTracking(sessionId: pairedSessionId)
+                await startActiveSessionPolling(token: t)
             } catch {
                 token = nil
                 UserDefaults.standard.removeObject(forKey: DefaultsKey.token)
@@ -82,7 +108,7 @@ final class SessionStore: ObservableObject {
     func login(email: String, password: String) async {
         do {
             let resp = try await api.login(email: email, password: password)
-            persistAuth(resp)
+            await persistAuth(resp)
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -91,14 +117,48 @@ final class SessionStore: ObservableObject {
     func register(email: String, password: String) async {
         do {
             let resp = try await api.register(email: email, password: password)
-            persistAuth(resp)
+            await persistAuth(resp)
         } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    /// Sign in via the 6-digit pairing code displayed on the desktop.
+    /// In one round-trip this both mints the phone's auth token and
+    /// binds it to the in-progress desktop study session — the user
+    /// never has to type their account password on the phone.
+    func loginWithCode(code: String) async {
+        do {
+            let resp = try await api.loginWithCode(code: code, deviceId: deviceId)
+            token = resp.token
+            user = resp.user
+            UserDefaults.standard.set(resp.token, forKey: DefaultsKey.token)
+            // Treat this exactly like a rising-edge auto-bind: the
+            // pairing code references an active desktop session, so
+            // counters reset and tracking starts immediately.
+            pairedSessionId = resp.sessionId
+            sessionStart = Date()
+            sessionEndedAt = nil
+            openCount = 0
+            totalDistractionMs = 0
+            activeSince = nil
+            reportSummary = nil
+            reportError = nil
+            statusMessage = "Paired with desktop session"
+            persistSessionState()
+            stopSessionTracking()
+            startSessionTracking(sessionId: resp.sessionId)
+            await startActiveSessionPolling(token: resp.token)
+            log.info("code-login bound to desktop session \(resp.sessionId, privacy: .public)")
+        } catch {
+            log.error("code-login failed: \(error.localizedDescription, privacy: .public)")
             statusMessage = error.localizedDescription
         }
     }
 
     func logout() {
         stopSessionTracking()
+        Task { [activeSessionPoller] in await activeSessionPoller.stop() }
         token = nil
         user = nil
         pairedSessionId = nil
@@ -111,16 +171,27 @@ final class SessionStore: ObservableObject {
         clearPersistedSessionState()
     }
 
-    private func persistAuth(_ resp: AuthResponse) {
+    private func persistAuth(_ resp: AuthResponse) async {
         token = resp.token
         user = resp.user
         UserDefaults.standard.set(resp.token, forKey: DefaultsKey.token)
-        if sessionStart == nil {
-            sessionStart = Date()
-        }
-        startSessionTracking(sessionId: pairedSessionId)
-        persistSessionState()
         statusMessage = nil
+        persistSessionState()
+
+        // Immediately check for an active desktop session and bind
+        // synchronously, so SessionView's "Started" time + counters
+        // already reflect the desktop session before the user sees
+        // the next render. Without this the user signs in, sees
+        // sessionStart="—" / counters at 0, and has to wait for the
+        // 5-second polling interval before the screen updates.
+        if let active = try? await api.activeSession(token: resp.token),
+           active.currentlyStudying,
+           let sid = active.currentSessionId {
+            await bindToActiveSession(sessionId: sid, startedAt: active.startedAt)
+        }
+
+        startSessionTracking(sessionId: pairedSessionId)
+        await startActiveSessionPolling(token: resp.token)
     }
 
     // MARK: - Pairing
@@ -144,6 +215,101 @@ final class SessionStore: ObservableObject {
         } catch {
             statusMessage = error.localizedDescription
         }
+    }
+
+    /// Auto-bind to a desktop session that the active-session poller
+    /// just observed. No 6-digit code, no UI flow — the same end state
+    /// as `claim(code:)` but driven by the backend signal that the
+    /// same-account user just clicked "Start Session" on the laptop.
+    ///
+    /// `startedAt` is the millisecond timestamp the desktop stamped on
+    /// `studyStatus.startedAt`. When supplied the SessionView's
+    /// "Started" label exactly matches the desktop's session-start
+    /// time; when absent we fall back to "now".
+    func bindToActiveSession(sessionId: String, startedAt: Double? = nil) async {
+        guard let token else { return }
+        if pairedSessionId == sessionId {
+            // Already bound to this session — nothing to do.
+            return
+        }
+        do {
+            let resp = try await api.autoPair(sessionId: sessionId, deviceId: deviceId, token: token)
+            pairedSessionId = resp.sessionId
+            sessionStart = startedAt.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
+            sessionEndedAt = nil
+            openCount = 0
+            totalDistractionMs = 0
+            activeSince = nil
+            reportSummary = nil
+            reportError = nil
+            statusMessage = "Paired with desktop session"
+            persistSessionState()
+            stopSessionTracking()
+            startSessionTracking(sessionId: resp.sessionId)
+            log.info("auto-bound to desktop session \(resp.sessionId, privacy: .public)")
+        } catch {
+            log.error("auto-bind failed: \(error.localizedDescription, privacy: .public)")
+            statusMessage = "Auto-pair failed: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Active session polling
+
+    private func startActiveSessionPolling(token: String) async {
+        await activeSessionPoller.stop()
+        await activeSessionPoller.start(token: token) { [weak self] transition in
+            guard let self else { return }
+            switch transition {
+            case .sessionStarted(let sessionId, let startedAt):
+                await self.bindToActiveSession(sessionId: sessionId, startedAt: startedAt)
+            case .sessionEnded(let sessionId):
+                await self.handleDesktopStopped(sessionId: sessionId)
+            }
+        }
+    }
+
+    /// Hook fired by `ActiveSessionPoller` when the desktop session ends.
+    ///
+    /// Stops the lifecycle monitor (no further open/close events should
+    /// be attributed to a session that no longer exists) and triggers the
+    /// existing on-device Zetic Melange report flow automatically — the
+    /// same `generateReport()` path the manual button still calls. The
+    /// resulting summary is shown in the same `SessionView`
+    /// "On-device distraction report" section and POSTed to
+    /// `/api/phone/report` so the desktop can render it (and the server
+    /// fires `feedReportIntoAgents()` to update the user's personal
+    /// Fetch.ai correlation profile).
+    func handleDesktopStopped(sessionId: String) async {
+        log.info("desktop stopped session \(sessionId, privacy: .public)")
+        // Make sure we attribute the report to the session that just
+        // ended, not any session that might race in afterwards.
+        if pairedSessionId == nil {
+            pairedSessionId = sessionId
+        }
+        // Stamp the falling-edge time so SessionView can show a
+        // visible "Session ended on desktop" banner the user can
+        // see even before the report finishes generating.
+        sessionEndedAt = Date()
+        statusMessage = "Session ended on desktop — generating report…"
+        reportError = nil
+        stopSessionTracking()
+        // Close out any open distraction segment so the live "Time
+        // on phone" counter stops ticking the instant the desktop
+        // session ends. Without this, if the phone happens to be in
+        // the middle of a distraction period when the desktop hits
+        // "End Session", the SessionView keeps incrementing
+        // `currentTotalDistractionMs(now:)` forever.
+        if let opened = activeSince {
+            totalDistractionMs += Date().timeIntervalSince(opened) * 1000
+            activeSince = nil
+            persistSessionState()
+        }
+        // Avoid double-firing if the user already tapped the manual
+        // "Generate distraction report" button while the session was
+        // running.
+        if reportInProgress { return }
+        if reportSummary != nil { return }
+        await generateReport()
     }
 
     // MARK: - Lifecycle tracking
@@ -235,6 +401,7 @@ final class SessionStore: ObservableObject {
             return
         }
         reportInProgress = true
+        reportError = nil
         defer { reportInProgress = false }
 
         let usage = await ScreenTimeUsage.shared.snapshot()
@@ -261,7 +428,9 @@ final class SessionStore: ObservableObject {
                         modelKey: result.modelKey,
                         inferenceMs: result.inferenceMs,
                         promptTokens: result.promptTokens,
-                        completionTokens: result.completionTokens
+                        completionTokens: result.completionTokens,
+                        unlockCount: openCount,
+                        totalDistractionMs: totalDistractionMs
                     ),
                     token: token
                 )
@@ -272,6 +441,7 @@ final class SessionStore: ObservableObject {
             }
         } catch {
             log.error("[generateReport] Failed: \(error.localizedDescription)")
+            reportError = error.localizedDescription
             statusMessage = "Report failed: \(error.localizedDescription)"
         }
     }

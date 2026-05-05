@@ -32,4 +32,14 @@ enum Config {
         Bundle.main.object(forInfoDictionaryKey: "MELANGE_DISTRACTION_MODEL_KEY") as? String
             ?? "residue/phone-distraction-v1"
     }
+
+    /// How often the iOS companion polls `/api/phone/active-session`
+    /// while signed in. Override per build via `RESIDUE_ACTIVE_POLL_S`.
+    static var activeSessionPollIntervalSeconds: Double {
+        if let raw = Bundle.main.object(forInfoDictionaryKey: "RESIDUE_ACTIVE_POLL_S") as? Double,
+           raw > 0 {
+            return raw
+        }
+        return 5.0
+    }
 }

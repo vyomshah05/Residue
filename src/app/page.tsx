@@ -156,6 +156,7 @@ function Dashboard({ auth }: { auth: AuthSession }) {
     rawFrequencyData,
     startListening,
     stopListening,
+    error: audioError,
   } = useAudioCapture();
 
   const {
@@ -207,18 +208,60 @@ function Dashboard({ auth }: { auth: AuthSession }) {
 
   const handleStartSession = useCallback(async () => {
     await startListening();
+    const newSessionId = `session-${Date.now()}`;
     setSessionActive(true);
     setSessionDuration(0);
-    setSessionId(`session-${Date.now()}`);
+    setSessionId(newSessionId);
     phone.reset();
-  }, [startListening, phone]);
+
+    // Notify the backend so user_data.studyStatus.currentlyStudying
+    // flips to true *immediately* on click. The iOS companion polls
+    // `/api/phone/active-session` and uses the false→true transition
+    // as the rising-edge signal to auto-bind + reset its counters.
+    // We can't depend on the side-effect of /api/session being
+    // POSTed from the snapshot useEffect — that path only runs once
+    // the user grants mic + screen-capture, which is blocked in
+    // insecure-context dev origins.
+    const token = auth.token;
+    if (token) {
+      fetch('/api/session/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ sessionId: newSessionId, mode: currentMode }),
+      }).catch(() => {
+        /* MongoDB may be unavailable; phone falls back to manual pairing. */
+      });
+    }
+  }, [startListening, phone, auth.token, currentMode]);
 
   const handleStopSession = useCallback(() => {
     stopListening();
     stopTracking();
     stopOverlay();
     setSessionActive(false);
-  }, [stopListening, stopTracking, stopOverlay]);
+
+    // Notify the backend so user_data.studyStatus.currentlyStudying flips
+    // to false. The iOS companion polls this flag to auto-trigger the
+    // on-device Melange distraction report when the desktop session
+    // ends (no manual button press needed on the phone).
+    const token = auth.token;
+    const sid = sessionId;
+    if (token && sid) {
+      fetch('/api/session/stop', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ sessionId: sid }),
+      }).catch(() => {
+        /* MongoDB may be unavailable; phone falls back to manual report. */
+      });
+    }
+  }, [stopListening, stopTracking, stopOverlay, auth.token, sessionId]);
 
   useEffect(() => {
     if (!sessionActive) return;
@@ -332,6 +375,13 @@ function Dashboard({ auth }: { auth: AuthSession }) {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+        {audioError && (
+          <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            <strong className="font-semibold">Microphone unavailable:</strong>{' '}
+            {audioError}
+          </div>
+        )}
+
         {/* Mode Selector */}
         <ModeSelector currentMode={currentMode} onModeChange={setCurrentMode} />
 

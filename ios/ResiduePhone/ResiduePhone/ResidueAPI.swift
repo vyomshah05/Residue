@@ -24,6 +24,31 @@ struct PairClaimResponse: Codable {
     let claimedAt: Double?
 }
 
+/// Mirrors the desktop's `/api/pair/code-login` response. The 6-digit
+/// pairing code is enough to mint a fresh auth token for the desktop
+/// user AND bind the phone to the in-progress study session in one
+/// call — the user never has to type their account password on the
+/// phone.
+struct CodeLoginResponse: Codable {
+    let token: String
+    let user: AuthUser
+    let sessionId: String
+    let claimedAt: Double?
+}
+
+/// Mirrors the desktop's `/api/phone/active-session` response. The phone
+/// polls this endpoint every few seconds; transitions in
+/// `currentlyStudying` drive auto-bind (false→true) and auto-report
+/// (true→false) on the device.
+struct ActiveSessionResponse: Codable {
+    let userId: String
+    let currentlyStudying: Bool
+    let currentSessionId: String?
+    let currentMode: String?
+    let startedAt: Double?
+    let endedAt: Double?
+}
+
 /// Mirrors the on-device distraction classifier output produced by the Zetic
 /// Melange model. Encodes 1:1 to the desktop's `PhoneStateInference` shape.
 struct DistractionInference: Codable {
@@ -57,7 +82,11 @@ struct PhoneEventPayload: Codable {
 }
 
 /// Mirrors the desktop's `/api/phone/report` body: the natural-language
-/// distraction summary produced on-device by the Melange LLM.
+/// distraction summary produced on-device by the Melange LLM. The
+/// `unlockCount` and `totalDistractionMs` fields are forwarded to the
+/// Fetch.ai agent bridge (`feedReportIntoAgents`) so the
+/// CorrelationAgent rebuild that fires after this POST is grounded in
+/// real measured distractions, not just the LLM's free-text summary.
 struct ReportPayload: Codable {
     let sessionId: String
     let summary: String
@@ -66,6 +95,8 @@ struct ReportPayload: Codable {
     let inferenceMs: Double
     let promptTokens: Int
     let completionTokens: Int
+    let unlockCount: Int
+    let totalDistractionMs: Double
 }
 
 enum APIError: LocalizedError {
@@ -130,6 +161,34 @@ final class ResidueAPI {
             body: ["code": code, "phoneDeviceId": deviceId],
             token: token
         )
+    }
+
+    /// Codeless companion to `claim(code:deviceId:token:)`. Used after the
+    /// poller observes that the user has started a desktop session for
+    /// the same Mongo account — there is no 6-digit code to type.
+    func autoPair(sessionId: String, deviceId: String, token: String) async throws -> PairClaimResponse {
+        try await postJSON(
+            path: "/api/pair/auto",
+            body: ["sessionId": sessionId, "phoneDeviceId": deviceId],
+            token: token
+        )
+    }
+
+    /// Sign-in-by-pairing-code. The 6-digit code minted by the desktop
+    /// (via `/api/pair/start`) is enough to authenticate the phone AND
+    /// bind it to the in-progress study session — no email/password
+    /// needed.
+    func loginWithCode(code: String, deviceId: String) async throws -> CodeLoginResponse {
+        try await postJSON(
+            path: "/api/pair/code-login",
+            body: ["code": code, "phoneDeviceId": deviceId]
+        )
+    }
+
+    // MARK: - Active session
+
+    func activeSession(token: String) async throws -> ActiveSessionResponse {
+        try await getJSON(path: "/api/phone/active-session", token: token)
     }
 
     // MARK: - Phone events
